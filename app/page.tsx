@@ -1,7 +1,27 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Baby, Check, Circle, Droplets, HeartPulse, MapPin, Radio, ShieldAlert, UserRound, WifiOff, Zap } from 'lucide-react'
+import {
+  Baby,
+  Check,
+  CheckCircle2,
+  Circle,
+  Droplets,
+  HeartHandshake,
+  HeartPulse,
+  Home,
+  MapPin,
+  Radio,
+  ShieldAlert,
+  ShieldCheck,
+  TriangleAlert,
+  UserRound,
+  Users,
+  UtensilsCrossed,
+  WifiOff,
+  X,
+  Zap,
+} from 'lucide-react'
 import { Semaforo, LEVELS, type Level } from '@/components/semaforo'
 import { DroneMap } from '@/components/drone-map'
 import { planRoute, type NodeId } from '@/lib/route-graph'
@@ -15,22 +35,37 @@ const initialAlerts: Alert[] = [
   { id: 'FRO-8B19', color: 'yellow', zone: 'LAS MORAS / CEIBOS', node: '2-3', people: 4, keywords: ['NIÑO', 'SIN AGUA'], score: 72, status: 'ESPERANDO' },
 ]
 
-const SIGNALS = [
-  { label: 'HERIDOS', icon: HeartPulse, tone: 'red' },
+type SignalOption = { label: string; icon: any; tone: string }
+
+const HELP_SIGNALS: SignalOption[] = [
   { label: 'SIN AGUA', icon: Droplets, tone: 'blue' },
-  { label: 'NIÑO', icon: Baby, tone: 'yellow' },
+  { label: 'ALIMENTOS', icon: UtensilsCrossed, tone: 'orange' },
+  { label: 'HERIDOS LEVES', icon: HeartPulse, tone: 'red' },
   { label: 'ADULTO MAYOR', icon: UserRound, tone: 'purple' },
+  { label: 'NIÑO / BEBÉ', icon: Baby, tone: 'yellow' },
   { label: 'CABLE CAÍDO', icon: Zap, tone: 'orange' },
+]
+
+const SAFE_SIGNALS: SignalOption[] = [
+  { label: 'EN MI CASA', icon: Home, tone: 'blue' },
+  { label: 'EN REFUGIO', icon: ShieldCheck, tone: 'green' },
+  { label: 'CON MI FAMILIA', icon: Users, tone: 'purple' },
+  { label: 'CON AGUA Y LUZ', icon: Zap, tone: 'yellow' },
+  { label: 'PUEDO AYUDAR', icon: HeartHandshake, tone: 'green' },
 ]
 
 type Screen = 'prepa' | 'central' | 'mobile'
 
 function Header({ screen, setScreen }: { screen: Screen; setScreen: (s: Screen) => void }) {
-  const tabs: [Screen, string][] = [['prepa', 'PREPA'], ['central', 'FARO CENTRAL'], ['mobile', 'FARO MÓVIL']]
+  const tabs: [Screen, string][] = [
+    ['prepa', 'REPORTE CIUDADANO'],
+    ['central', 'FARO CENTRAL'],
+    ['mobile', 'FARO MÓVIL'],
+  ]
   return (
     <>
       <header className="topbar">
-        <div className="logo"><span className="logo-mark"><Radio /></span><b>FARO</b><span>CENTRAL</span></div>
+        <div className="logo"><span className="logo-mark"><Radio /></span><b>FARO</b><span>RED DE EMERGENCIA</span></div>
         <nav>{tabs.map(([id, label]) => <button key={id} className={screen === id ? 'nav-active' : ''} onClick={() => setScreen(id)}>{label}</button>)}</nav>
         <div className="system"><i /> OPERATIVO <strong>10:42</strong></div>
       </header>
@@ -40,14 +75,28 @@ function Header({ screen, setScreen }: { screen: Screen; setScreen: (s: Screen) 
 }
 
 export default function Page() {
-  const [screen, setScreen] = useState<Screen>('central')
+  const [screen, setScreen] = useState<Screen>('prepa')
   const [alerts, setAlerts] = useState(initialAlerts)
   const [mission, setMission] = useState<Alert | null>(null)
 
   const send = (color: Color, keywords: string[]) => {
-    const next: Alert = { id: 'FRO-A104', color, zone: 'UBICACIÓN ACTUAL', node: '4-2', people: 1, keywords: keywords.length ? keywords : ['SOLICITUD NUEVA'], score: color === 'red' ? 91 : color === 'yellow' ? 68 : 20, status: 'ESPERANDO' }
+    const next: Alert = {
+      id: 'FRO-A104',
+      color,
+      zone: 'UBICACIÓN ACTUAL',
+      node: '4-2',
+      people: 1,
+      keywords: keywords.length ? keywords : [color === 'red' ? 'PELIGRO INMEDIATO' : color === 'yellow' ? 'SOLICITUD DE ASISTENCIA' : 'A SALVO'],
+      score: color === 'red' ? 95 : color === 'yellow' ? 68 : 20,
+      status: 'ESPERANDO',
+    }
     setAlerts(a => [next, ...a.filter(x => x.id !== next.id)].sort((x, y) => y.score - x.score))
   }
+
+  const cancel = (id = 'FRO-A104') => {
+    setAlerts(a => a.filter(x => x.id !== id))
+  }
+
   const authorize = (a: Alert) => {
     setMission(a)
     setAlerts(list => list.map(x => (x.id === a.id ? { ...x, status: 'DESPACHADO' } : x)))
@@ -57,7 +106,7 @@ export default function Page() {
   return (
     <main className="app-shell">
       <Header screen={screen} setScreen={setScreen} />
-      {screen === 'prepa' && <Prepa onSend={send} />}
+      {screen === 'prepa' && <Prepa onSend={send} onCancel={cancel} />}
       {screen === 'central' && <Central alerts={alerts} authorize={authorize} />}
       {screen === 'mobile' && <Mobile mission={mission || alerts[0]} />}
     </main>
@@ -66,46 +115,185 @@ export default function Page() {
 
 /* ---------- PREPA: pantalla del ciudadano (servida por el ESP32) ---------- */
 
-function Prepa({ onSend }: { onSend: (c: Color, k: string[]) => void }) {
+function Prepa({
+  onSend,
+  onCancel,
+}: {
+  onSend: (c: Color, k: string[]) => void
+  onCancel: () => void
+}) {
   const [level, setLevel] = useState<Level | null>(null)
   const [signals, setSignals] = useState<string[]>([])
   const [sent, setSent] = useState(false)
-  const toggle = (s: string) => setSignals(list => (list.includes(s) ? list.filter(x => x !== s) : [...list, s]))
-  const reset = () => { setLevel(null); setSignals([]); setSent(false) }
-  const current = LEVELS.find(l => l.id === level)
+  const [cancelled, setCancelled] = useState(false)
 
-  if (sent) return (
-    <section className="prepa-simple">
-      <div className="success"><Check /><b>RECIBIDO</b></div>
-      <h1>Reporte enviado</h1>
-      <p className="instruction">FARO Central ya está priorizando tu solicitud. Quédate donde estás si es seguro.</p>
-      <button className="big-button" onClick={reset}>NUEVO REPORTE</button>
-    </section>
-  )
+  const toggle = (s: string) => setSignals(list => (list.includes(s) ? list.filter(x => x !== s) : [...list, s]))
+
+  const reset = () => {
+    setLevel(null)
+    setSignals([])
+    setSent(false)
+    setCancelled(false)
+  }
+
+  const handleSelect = (l: Level) => {
+    setCancelled(false)
+    setSignals([])
+    setLevel(l)
+
+    if (l === 'red') {
+      // Envío DIRECTO e INMEDIATO sin opciones extra
+      onSend('red', ['PELIGRO INMEDIATO'])
+      setSent(true)
+    }
+  }
+
+  const handleCancelDanger = () => {
+    onCancel()
+    setSent(false)
+    setLevel(null)
+    setSignals([])
+    setCancelled(true)
+  }
+
+  // Vista de confirmación para PELIGRO enviado
+  if (sent && level === 'red') {
+    return (
+      <section className="prepa-simple">
+        <div className="danger-sent-card">
+          <div className="danger-sent-header">
+            <TriangleAlert className="danger-sent-icon" />
+            <div>
+              <h3>¡SEÑAL DE PELIGRO ENVIADA!</h3>
+              <p>FARO Central recibió tu alerta prioritaria vía LoRa</p>
+            </div>
+          </div>
+          <div className="danger-sent-advice">
+            Prioridad de rescate máxima activada. Si la zona es insegura, mantente a resguardo.
+          </div>
+          <button className="cancel-danger-btn" onClick={handleCancelDanger}>
+            <X /> ANULAR ALERTA (FUE UN ERROR)
+          </button>
+        </div>
+
+        <button className="big-button outline-btn" onClick={reset}>
+          VOLVER AL MENÚ DE ESTADO
+        </button>
+        <small><WifiOff /> Transmisión inmediata vía nodo LoRa local</small>
+      </section>
+    )
+  }
+
+  // Vista de confirmación para AYUDA o ESTOY BIEN
+  if (sent) {
+    const current = LEVELS.find(l => l.id === level)
+    return (
+      <section className="prepa-simple">
+        <div className="success"><Check /><b>REPORTE ENVIADO</b></div>
+        <div className={`sent-badge sent-${level}`}>
+          <strong>{current?.label}</strong> {signals.length > 0 && `· ${signals.join(', ')}`}
+        </div>
+        <p className="instruction">
+          {level === 'yellow'
+            ? 'Tu pedido de asistencia está en cola de atención de FARO Central.'
+            : 'Se registró que te encuentras a salvo en tu ubicación.'}
+        </p>
+        <button className="big-button outline-btn" onClick={reset}>
+          NUEVO REPORTE O ACTUALIZAR
+        </button>
+        <small><WifiOff /> Transmisión confirmada vía radio LoRa</small>
+      </section>
+    )
+  }
+
+  const current = LEVELS.find(l => l.id === level)
 
   return (
     <section className="prepa-simple">
-      <div className="prepa-topline"><div className="prepa-kicker">PREPA / REPORTE RÁPIDO</div><span className="prepa-signal"><i /> SIN INTERNET</span></div>
+      <div className="prepa-topline">
+        <div className="prepa-kicker">FARO · REPORTE RÁPIDO</div>
+        <span className="prepa-signal"><i /> LORA ACTIVO</span>
+      </div>
       <h1>¿Cómo estás?</h1>
-      <p className="instruction">Toca un color y envía.</p>
+      <p className="instruction">
+        Toca una opción. <b>Peligro</b> se envía de inmediato; <b>Ayuda</b> y <b>Estoy bien</b> ofrecen opciones adicionales.
+      </p>
 
-      <Semaforo value={level} onChange={l => { setLevel(l); if (l === 'green') setSignals([]) }} />
+      {cancelled && (
+        <div className="anulado-notice">
+          <CheckCircle2 />
+          <span>Alerta de peligro anulada correctamente. Central fue notificada.</span>
+        </div>
+      )}
 
-      {level && level !== 'green' && (
+      <Semaforo value={level} onChange={handleSelect} />
+
+      {/* Opciones extra solo para AYUDA */}
+      {level === 'yellow' && (
         <div className="quick-tags">
-          <span>¿ALGO MÁS? (OPCIONAL)</span>
+          <span>¿QUÉ TIPO DE ASISTENCIA NECESITAS? (OPCIONAL)</span>
           <div className="tag-grid">
-            {SIGNALS.map(({ label, icon: Icon, tone }) => (
-              <button key={label} className={`tag-${tone} ${signals.includes(label) ? 'tag-on' : ''}`} aria-pressed={signals.includes(label)} onClick={() => toggle(label)}><Icon /><b>{label}</b>{signals.includes(label) && <Check className="tag-check" />}</button>
+            {HELP_SIGNALS.map(({ label, icon: Icon, tone }) => (
+              <button
+                key={label}
+                type="button"
+                className={`tag-${tone} ${signals.includes(label) ? 'tag-on' : ''}`}
+                aria-pressed={signals.includes(label)}
+                onClick={() => toggle(label)}
+              >
+                <Icon />
+                <b>{label}</b>
+                {signals.includes(label) && <Check className="tag-check" />}
+              </button>
             ))}
           </div>
         </div>
       )}
 
-      <button disabled={!level} className={`big-button send-${level ?? 'none'}`} onClick={() => { onSend(level!, signals); setSent(true) }}>
-        {current ? `ENVIAR · ${current.label}` : 'ELIGE UN COLOR'} <span>→</span>
-      </button>
-      <small><WifiOff /> Se envía por LoRa · no requiere internet</small>
+      {/* Opciones extra solo para ESTOY BIEN */}
+      {level === 'green' && (
+        <div className="quick-tags">
+          <span>DETALLES DE TU SITUACIÓN (OPCIONAL)</span>
+          <div className="tag-grid">
+            {SAFE_SIGNALS.map(({ label, icon: Icon, tone }) => (
+              <button
+                key={label}
+                type="button"
+                className={`tag-${tone} ${signals.includes(label) ? 'tag-on' : ''}`}
+                aria-pressed={signals.includes(label)}
+                onClick={() => toggle(label)}
+              >
+                <Icon />
+                <b>{label}</b>
+                {signals.includes(label) && <Check className="tag-check" />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Botón de envío para AYUDA o ESTOY BIEN */}
+      {level && level !== 'red' && (
+        <button
+          className={`big-button send-${level}`}
+          onClick={() => {
+            onSend(level, signals)
+            setSent(true)
+          }}
+        >
+          {level === 'yellow'
+            ? `ENVIAR PEDIDO DE AYUDA ${signals.length ? `(${signals.length})` : ''}`
+            : `ENVIAR REPORTE · ESTOY BIEN ${signals.length ? `(${signals.length})` : ''}`} <span>→</span>
+        </button>
+      )}
+
+      {!level && (
+        <div className="select-prompt">
+          Toca un botón arriba para continuar
+        </div>
+      )}
+
+      <small><WifiOff /> Transmisión directa por radio LoRa · no requiere internet</small>
     </section>
   )
 }
